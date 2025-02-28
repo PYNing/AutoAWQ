@@ -33,8 +33,8 @@ def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, p
                                         split=calib_split)
 
     if len(visual_calib_dataset) < max_calib_samples:
-        logging.warning(f"`max_calib_samples` is set to {max_calib_samples}, 
-                        but the dataset contains only {len(visual_calib_dataset)} samples. 
+        logging.warning(f"`max_calib_samples` is set to {max_calib_samples}, \
+                        but the dataset contains only {len(visual_calib_dataset)} samples. \
                         `max_calib_samples` is adjusted to {len(visual_calib_dataset)}.")
         max_calib_samples = len(visual_calib_dataset)
     

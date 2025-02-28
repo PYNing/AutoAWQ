@@ -98,11 +98,8 @@ class BaseAWQForCausalLM(nn.Module):
         self,
         model: Annotated[PreTrainedModel, Doc("The pretrained or quantized model.")],
         model_type: Annotated[str, Doc("The model type, found in config.json.")],
-        is_llm_quantized: Annotated[
-            bool, Doc("Indicates if the llm part of current model is quantized.")
-        ],
-        is_visual_quantized: Annotated[
-            bool, Doc("Indicates if the visual part of current model is quantized.")
+        is_quantized: Annotated[
+            bool, Doc("Indicates if the current model is quantized.")
         ],
         config: Annotated[PretrainedConfig, Doc("The config of the model.")],
         quant_config: Annotated[
@@ -116,12 +113,12 @@ class BaseAWQForCausalLM(nn.Module):
         super().__init__()
         self.model: PreTrainedModel = model
         self.model_type: str = model_type
-        self.is_llm_quantized: bool = is_llm_quantized
-        self.is_visual_quantized: bool = is_visual_quantized
         self.search_result = None
         self.config: PretrainedConfig = config
         self.quant_config: AwqConfig = quant_config
         self.processor: ProcessorMixin = processor
+        self.is_llm_quantized = is_quantized and self.quant_config.is_llm_quantized
+        self.is_visual_quantized = is_quantized and self.quant_config.is_visual_quantized
 
     def to(self, device: Annotated[str, Doc("The device to move your model to.")]):
         """A utility function for moving the model to a device."""

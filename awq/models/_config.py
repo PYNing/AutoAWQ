@@ -7,6 +7,8 @@ from transformers.utils.hub import PushToHubMixin, cached_file
 
 @dataclass
 class AwqConfig(PushToHubMixin):
+    is_llm_quantized: bool = field(default=False)
+    is_visual_quantized: bool = field(default=False)
     quant_method: str = field(default="awq")
     zero_point: bool = field(default=True)
     q_group_size: int = field(default=128)
