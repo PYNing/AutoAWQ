@@ -14,6 +14,9 @@ class AwqConfig(PushToHubMixin):
     version: str = field(default="gemm")
     config_file_name = "config.json"
     modules_to_not_convert: Optional[List] = None
+    quant_llm: bool = field(default=True)
+    quant_visual: bool = field(default=False)
+    visual_quant_config: Optional[Dict] = None
 
     @classmethod
     def from_dict(cls, quant_config: Dict = {}):
@@ -22,6 +25,8 @@ class AwqConfig(PushToHubMixin):
         else:
             quant_config = cls(**quant_config)
             quant_config.version = quant_config.version.lower()
+            if quant_config.quant_visual and quant_config.visual_quant_config is None:
+                raise RuntimeError("visual_quant_config must be defined when quant_visual is enabled.")
 
         return quant_config
 

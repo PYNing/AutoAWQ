@@ -15,6 +15,25 @@ class Qwen2VLAWQForCausalLM(BaseAWQForCausalLM):
         return model.model.layers
 
     @staticmethod
+    def support_visual_modules_quantize(model: "Qwen2VLForConditionalGeneration"):
+        return True
+
+    @staticmethod
+    def get_visual_layers_prefix(model: "Qwen2VLForConditionalGeneration"):
+        return "visual.blocks."
+
+    @staticmethod
+    def get_visual_model(model: "Qwen2VLForConditionalGeneration"):
+        return model.visual
+
+    @staticmethod
+    def get_visual_model(model: "Qwen2VLForConditionalGeneration"):
+        return {
+            ["attn.qkv", "norm1"],
+            ["mlp.fc1", "norm2"]
+        }
+
+    @staticmethod
     def get_act_for_scaling(module: "Qwen2VLForConditionalGeneration"):
         return dict(is_scalable=False)
 

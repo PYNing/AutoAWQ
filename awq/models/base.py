@@ -4,6 +4,7 @@ import warnings
 import torch
 import transformers
 import torch.nn as nn
+import logging
 
 from tqdm import tqdm
 from typing import List, Union, Dict
@@ -18,6 +19,7 @@ from awq.modules.linear import (
     WQLinear_Exllama,
     WQLinear_ExllamaV2,
     WQLinear_GEMVFast,
+    Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear,
     marlin_post_init,
     exllama_post_init,
     exllamav2_post_init,
@@ -47,6 +49,7 @@ from accelerate.big_modeling import (
 from awq.models._config import AwqConfig
 from awq.modules.act import ScaledActivation
 from awq.quantize.quantizer import AwqQuantizer
+from awq.quantize.visual_quantizer import VisualQuantizer
 from awq.utils.module import get_named_linears, set_op_by_name
 
 
@@ -95,8 +98,11 @@ class BaseAWQForCausalLM(nn.Module):
         self,
         model: Annotated[PreTrainedModel, Doc("The pretrained or quantized model.")],
         model_type: Annotated[str, Doc("The model type, found in config.json.")],
-        is_quantized: Annotated[
-            bool, Doc("Indicates if the current model is quantized.")
+        is_llm_quantized: Annotated[
+            bool, Doc("Indicates if the llm part of current model is quantized.")
+        ],
+        is_visual_quantized: Annotated[
+            bool, Doc("Indicates if the visual part of current model is quantized.")
         ],
         config: Annotated[PretrainedConfig, Doc("The config of the model.")],
         quant_config: Annotated[
@@ -110,7 +116,8 @@ class BaseAWQForCausalLM(nn.Module):
         super().__init__()
         self.model: PreTrainedModel = model
         self.model_type: str = model_type
-        self.is_quantized: bool = is_quantized
+        self.is_llm_quantized: bool = is_llm_quantized
+        self.is_visual_quantized: bool = is_visual_quantized
         self.search_result = None
         self.config: PretrainedConfig = config
         self.quant_config: AwqConfig = quant_config
@@ -189,10 +196,14 @@ class BaseAWQForCausalLM(nn.Module):
         ] = 1024
         * 1024
         * 1024,
-        quantizer_cls: Annotated[
+        llm_quantizer_cls: Annotated[
             AwqQuantizer,
-            Doc("If you want to customize the quantization class, you can use AwqQuantizer as a base class.")
+            Doc("If you want to customize the LLM quantization class, you can use AwqQuantizer as a base class.")
         ] = AwqQuantizer,
+        visual_quantizer_cls: Annotated[
+            VisualQuantizer,
+            Doc("If you want to customize the LLM quantization class, you can use AwqQuantizer as a base class.")
+        ] = VisualQuantizer,
         **kwargs,
     ):
         """
@@ -214,33 +225,52 @@ class BaseAWQForCausalLM(nn.Module):
         """
         self.quant_config: AwqConfig = AwqConfig.from_dict(quant_config)
 
-        if hasattr(self, "modules_to_not_convert"):
-            self.quant_config.modules_to_not_convert = self.modules_to_not_convert
-
-        self.quantizer = quantizer_cls(
-            self,
-            self.model,
-            tokenizer,
-            self.quant_config.w_bit,
-            self.quant_config.q_group_size,
-            self.quant_config.zero_point,
-            self.quant_config.version,
-            calib_data,
-            split,
-            text_column,
-            duo_scaling,
-            modules_to_not_convert=self.quant_config.modules_to_not_convert,
-            export_compatible=export_compatible,
-            apply_clip=apply_clip,
-            n_parallel_calib_samples=n_parallel_calib_samples,
-            max_calib_samples=max_calib_samples,
-            max_calib_seq_len=max_calib_seq_len,
-            max_chunk_memory=max_chunk_memory,
-            **kwargs,
-        )
-        self.quantizer.quantize()
-
-        self.is_quantized = True
+        if self.quant_config.quant_llm:
+            if hasattr(self, "modules_to_not_convert"):
+                self.quant_config.modules_to_not_convert = self.modules_to_not_convert
+            self.quantizer = llm_quantizer_cls(
+                self,
+                self.model,
+                tokenizer,
+                self.quant_config.w_bit,
+                self.quant_config.q_group_size,
+                self.quant_config.zero_point,
+                self.quant_config.version,
+                calib_data,
+                split,
+                text_column,
+                duo_scaling,
+                modules_to_not_convert=self.quant_config.modules_to_not_convert,
+                export_compatible=export_compatible,
+                apply_clip=apply_clip,
+                n_parallel_calib_samples=n_parallel_calib_samples,
+                max_calib_samples=max_calib_samples,
+                max_calib_seq_len=max_calib_seq_len,
+                max_chunk_memory=max_chunk_memory,
+                **kwargs,
+            )
+            self.quantizer.quantize()
+            self.is_llm_quantized = True
+        else:
+            logging.info("Skip quantize LLM modules")
+            self.is_llm_quantized = False
+        
+        if self.quant_config.quant_visual:
+            try:
+                if not self.support_visual_modules_quantize():
+                    raise RuntimeError("Visual modules quantization is not supported for the current model.")
+            except AttributeError:
+                raise RuntimeError("Method 'support_visual_modules_quantize' is not available. Please confirm that this is a multimodal model.")
+            
+            self.visual_quantizer = visual_quantizer_cls(
+                
+            )
+            self.visual_quantizer.quantize()
+            self.is_visual_quantized = True
+        else:
+            logging.info("Skip quantize Visual modules")
+            self.is_visual_quantized = False
+            
 
     @torch.no_grad()
     def pack(self):

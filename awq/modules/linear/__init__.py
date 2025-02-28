@@ -5,3 +5,4 @@ from .gemm_ipex import WQLinear_IPEX, ipex_post_init
 from .gemv import WQLinear_GEMV
 from .marlin import WQLinear_Marlin, marlin_post_init
 from .gemv_fast import WQLinear_GEMVFast
+from .igemm import Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear
