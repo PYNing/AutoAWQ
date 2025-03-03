@@ -1,5 +1,6 @@
 import torch.nn as nn
 import importlib
+import logging
 
 def try_import(module_name):
     try:
@@ -62,3 +63,21 @@ def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert):
         if not any(key in name for key in modules_to_not_convert):
             filtered_layers[name] = linear_layer
     return filtered_layers
+
+def get_visual_quant_linear_names(model,
+                                  visual_layers_prefix,
+                                  visual_quant_config,
+                                  ):
+    quant_linear_names = list()
+    for name, module in model.named_modules():
+        if not (name.startswith(visual_layers_prefix) and isinstance(module, nn.torch.nn.Linear)):
+            continue
+        if name not in visual_quant_config:
+            logging.info(f"Missing quantization configuration for `{name}` in `visual_quant_config`, skipping its quantization.")
+            continue
+        linear_quant_config = visual_quant_config[name]
+        if not linear_quant_config["quant"]:
+            logging.info(f"Quantization for `{name}` is set to disabled, skipping its quantization.")
+            continue
+        quant_linear_names.append(name)
+    return quant_linear_names

@@ -1,9 +1,9 @@
-from awq.quantize.visual_quant_utils import (get_quant_linear_names, 
-                                             get_cali_data, 
+from awq.quantize.visual_quant_utils import (get_cali_data, 
                                              get_act_scales, 
                                              smooth_model,
                                              get_static_decoder_layer_scales,
                                              quant_linear_layers)
+from awq.utils.module import get_visual_quant_linear_names
 
 class VisualQuantizer:
     def __init__(
@@ -39,7 +39,7 @@ class VisualQuantizer:
         visual_layers_prefix = self.model_warpper.get_visual_layers_prefix()
         processor_input_map = self.model_warpper.get_processor_input_map()
         fcs_ln_group_map = self.model_warpper.get_fcs_ln_group_map()
-        quant_linear_names = get_quant_linear_names(self.model, visual_layers_prefix, self.quant_config)
+        quant_linear_names = get_visual_quant_linear_names(self.model, visual_layers_prefix, self.quant_config)
         
         cali_data = get_cali_data(self.calib_dataset_name, 
                                   self.calib_subset, 

@@ -7,25 +7,7 @@ from awq.modules.linear import Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear
 import numpy as np
 import logging
 from datasets import load_dataset
-from awq.utils.utils import get_module_by_name_suffix
-
-def get_quant_linear_names(model,
-                           visual_layers_prefix,
-                           visual_quant_config,
-                          ):
-    quant_linear_names = list()
-    for name, module in model.named_modules():
-        if not (name.startswith(visual_layers_prefix) and isinstance(module, nn.torch.nn.Linear)):
-            continue
-        if name not in visual_quant_config:
-            logging.info(f"Missing quantization configuration for `{name}` in `visual_quant_config`, skipping its quantization.")
-            continue
-        linear_quant_config = visual_quant_config[name]
-        if not linear_quant_config["quant"]:
-            logging.info(f"Quantization for `{name}` is set to disabled, skipping its quantization.")
-            continue
-        quant_linear_names.append(name)
-    return quant_linear_names
+from awq.utils.module import set_op_by_name, get_op_by_name
 
 def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, processor, max_calib_samples):
     visual_calib_dataset = load_dataset(path=calib_dataset_name, 
@@ -119,7 +101,7 @@ def get_related_fcs_ln(model, moudle_name, ln_linear_map, quant_config):
     target_ln = list()
     for suffix in target_group:
         target_moudle_name = moudle_name.replace(target_suffix, suffix)
-        target_moudle = get_module_by_name_suffix(model, target_moudle_name)
+        target_moudle = get_op_by_name(model, target_moudle_name)
         
         if isinstance(target_moudle, nn.Linear):
             target_fc_names.append(target_moudle_name)
@@ -264,14 +246,12 @@ def quant_linear_layers(model,
     pbar = tqdm(range(quant_linear_names))
     for i in pbar:
         linear_name = quant_linear_names[i]
-        linear = get_module_by_name_suffix(model, linear_name)
+        linear = get_op_by_name(model, linear_name)
         linear_quant_config = quant_config["name"]
         quanted_linear = Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear.from_float(linear,
                                                                                    act_io_range[linear_name]["input"],
                                                                                    act_io_range[linear_name]["output"],
                                                                                    linear_quant_config["act_quant_bit"],
                                                                                    linear_quant_config["gemm_out_dtype"])
-        parent_module_name = '.'.join(linear_name.split('.')[:-1])
-        parent_module = get_module_by_name_suffix(parent_module_name)
-        linear_suffix_name = linear_name.split('.')[-1]
-        parent_module._modules[linear_suffix_name] = quanted_linear
+        set_op_by_name(model, linear_name, quanted_linear)
+        

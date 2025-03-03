@@ -46,7 +46,7 @@ from accelerate.big_modeling import (
     load_checkpoint_and_dispatch,
 )
 
-from awq.models._config import AwqConfig
+from awq.models._config import AwqConfig, VisualQuantConfig
 from awq.modules.act import ScaledActivation
 from awq.quantize.quantizer import AwqQuantizer
 from awq.quantize.visual_quantizer import VisualQuantizer
@@ -103,7 +103,10 @@ class BaseAWQForCausalLM(nn.Module):
         ],
         config: Annotated[PretrainedConfig, Doc("The config of the model.")],
         quant_config: Annotated[
-            AwqConfig, Doc("The quantization config of the model.")
+            AwqConfig, Doc("The quantization config of the LLM model.")
+        ],
+        visual_quant_config: Annotated[
+            VisualQuantConfig, Doc("The quantization config of the Visual model.")
         ],
         processor: Annotated[
             BaseImageProcessor, Doc("An optional processor, e.g. for vision models.")
@@ -116,9 +119,9 @@ class BaseAWQForCausalLM(nn.Module):
         self.search_result = None
         self.config: PretrainedConfig = config
         self.quant_config: AwqConfig = quant_config
+        self.visual_quant_config: VisualQuantConfig = visual_quant_config
         self.processor: ProcessorMixin = processor
-        self.is_llm_quantized = is_quantized and self.quant_config.is_llm_quantized
-        self.is_visual_quantized = is_quantized and self.quant_config.is_visual_quantized
+        self.is_quantized: bool = is_quantized
 
     def to(self, device: Annotated[str, Doc("The device to move your model to.")]):
         """A utility function for moving the model to a device."""
@@ -140,7 +143,7 @@ class BaseAWQForCausalLM(nn.Module):
             PreTrainedTokenizer, Doc("The tokenizer to use for quantization.")
         ] = None,
         quant_config: Annotated[
-            Dict, Doc("The quantization config you want to use.")
+            Dict, Doc("The quantization config for LLM you want to use.")
         ] = {},
         calib_data: Annotated[
             Union[str, List[str]],
@@ -193,10 +196,28 @@ class BaseAWQForCausalLM(nn.Module):
         ] = 1024
         * 1024
         * 1024,
-        llm_quantizer_cls: Annotated[
+        quantizer_cls: Annotated[
             AwqQuantizer,
             Doc("If you want to customize the LLM quantization class, you can use AwqQuantizer as a base class.")
         ] = AwqQuantizer,
+        visual_quant_config: Annotated[
+            Dict, Doc("The quantization config for Vision Module you want to use.")
+        ] = {},
+        visual_calib_data: Annotated[
+            Dict, Doc("The quantization config for Vision Module you want to use.")
+        ] = {},
+        visual_calib_subset: Annotated[
+            Dict, Doc("The quantization config for Vision Module you want to use.")
+        ] = {},
+        visual_calib_split: Annotated[
+            Dict, Doc("The quantization config for Vision Module you want to use.")
+        ] = {},      
+        image_column: Annotated[
+            Dict, Doc("The quantization config for Vision Module you want to use.")
+        ] = {},
+        visual_smooth_quant_alpha: Annotated[
+            Dict, Doc("The quantization config for Vision Module you want to use.")
+        ] = {},  
         visual_quantizer_cls: Annotated[
             VisualQuantizer,
             Doc("If you want to customize the LLM quantization class, you can use AwqQuantizer as a base class.")
@@ -220,12 +241,16 @@ class BaseAWQForCausalLM(nn.Module):
         model.quantize(tokenizer, quant_config)
         ```
         """
-        self.quant_config: AwqConfig = AwqConfig.from_dict(quant_config)
+        self.quant_config = AwqConfig.from_dict(quant_config) if quant_config else None
+        self.visual_quant_config = VisualQuantConfig.from_dict(visual_quant_config) if visual_quant_config else None
+        
+        if not (self.quant_config or self.visual_quant_config):
+            raise RuntimeError("`quant_config` and `visual_quant_config` cannot both be not configured.")
 
-        if self.quant_config.quant_llm:
+        if self.quant_config:
             if hasattr(self, "modules_to_not_convert"):
                 self.quant_config.modules_to_not_convert = self.modules_to_not_convert
-            self.quantizer = llm_quantizer_cls(
+            self.quantizer = quantizer_cls(
                 self,
                 self.model,
                 tokenizer,
@@ -247,26 +272,20 @@ class BaseAWQForCausalLM(nn.Module):
                 **kwargs,
             )
             self.quantizer.quantize()
-            self.is_llm_quantized = True
         else:
             logging.info("Skip quantize LLM modules")
-            self.is_llm_quantized = False
         
-        if self.quant_config.quant_visual:
+        if self.visual_quant_config:
             try:
                 if not self.support_visual_modules_quantize():
                     raise RuntimeError("Visual modules quantization is not supported for the current model.")
             except AttributeError:
                 raise RuntimeError("Method 'support_visual_modules_quantize' is not available. Please confirm that this is a multimodal model.")
             
-            self.visual_quantizer = visual_quantizer_cls(
-                
-            )
+            self.visual_quantizer = visual_quantizer_cls()
             self.visual_quantizer.quantize()
-            self.is_visual_quantized = True
         else:
             logging.info("Skip quantize Visual modules")
-            self.is_visual_quantized = False
             
 
     @torch.no_grad()
@@ -315,7 +334,8 @@ class BaseAWQForCausalLM(nn.Module):
                 return x
 
         # Save model and config files with empty state dict
-        self.model.config.quantization_config = self.quant_config.to_transformers_dict()
+        self.model.config.quantization_config = self.quant_config.to_transformers_dict() if self.quant_config else None
+        self.model.config.visual_quantization_config = self.visual_quant_config.to_transformers_dict() if self.visual_quant_config else None
         self.model.generation_config.do_sample = True
         self.model.save_pretrained(save_dir, state_dict=EmptyModule().state_dict())
 
@@ -388,14 +408,14 @@ class BaseAWQForCausalLM(nn.Module):
     ):
         """A method for initialization of pretrained models, usually in FP16."""
         # Get weights path and quant config
-        model_weights_path, config, quant_config = self._load_config(
-            self,
-            model_path,
-            "",
-            safetensors,
-            trust_remote_code=trust_remote_code,
-            download_kwargs=download_kwargs,
-        )
+        model_weights_path, config, quant_config, visual_quant_config = self._load_config(
+                                                                                          self,
+                                                                                          model_path,
+                                                                                          "",
+                                                                                          safetensors,
+                                                                                          trust_remote_code=trust_remote_code,
+                                                                                          download_kwargs=download_kwargs,
+                                                                                         )
 
         target_cls_name = TRANSFORMERS_AUTO_MAPPING_DICT[config.model_type]
         target_cls = getattr(transformers, target_cls_name)
@@ -427,6 +447,7 @@ class BaseAWQForCausalLM(nn.Module):
             is_quantized=False,
             config=config,
             quant_config=quant_config,
+            visual_quant_config=visual_quant_config,
             processor=processor,
         )
 
@@ -503,16 +524,16 @@ class BaseAWQForCausalLM(nn.Module):
     ):
         """A method for initialization of a quantized model, usually in INT4."""
         # [STEP 1-2] Load weights path and configs
-        model_weights_path, config, quant_config = self._load_config(
-            self,
-            model_path,
-            model_filename,
-            safetensors,
-            trust_remote_code,
-            max_seq_len=max_seq_len,
-            download_kwargs=download_kwargs,
-            **config_kwargs,
-        )
+        model_weights_path, config, quant_config, visual_quant_config = self._load_config(
+                                                                                          self,
+                                                                                          model_path,
+                                                                                          model_filename,
+                                                                                          safetensors,
+                                                                                          trust_remote_code,
+                                                                                          max_seq_len=max_seq_len,
+                                                                                          download_kwargs=download_kwargs,
+                                                                                          **config_kwargs,
+                                                                                         )
 
         target_cls_name = TRANSFORMERS_AUTO_MAPPING_DICT[config.model_type]
         target_cls = getattr(transformers, target_cls_name)
@@ -538,7 +559,7 @@ class BaseAWQForCausalLM(nn.Module):
             self,
             model,
             quant_config,
-            quant_config.version,
+            visual_quant_config,
             use_exllama=use_exllama,
             use_exllama_v2=use_exllama_v2,
             use_ipex=use_ipex,
@@ -590,6 +611,7 @@ class BaseAWQForCausalLM(nn.Module):
             is_quantized=True,
             config=config,
             quant_config=quant_config,
+            visual_quant_config=visual_quant_config,
             processor=None,
         )
 
@@ -634,6 +656,7 @@ class BaseAWQForCausalLM(nn.Module):
         # [STEP 2] Load config and set sequence length
         # TODO: Create BaseAWQConfig class
         quant_config = AwqConfig.from_pretrained(model_path)
+        visual_quant_config = VisualQuantConfig.from_pretrained(model_path)
 
         # Load model config and set max generation length
         if max_seq_len is None and hasattr(self, "max_seq_len_key"):
@@ -653,9 +676,31 @@ class BaseAWQForCausalLM(nn.Module):
             )
             config.max_seq_len = max_seq_len
 
-        return model_weights_path, config, quant_config
+        return model_weights_path, config, quant_config, visual_quant_config
 
     def _load_quantized_modules(
+        self, model, quant_config, visual_quant_config, use_exllama, use_exllama_v2, use_ipex=False
+    ):
+        if quant_config:            
+            self._load_quantized_llm_modules(self=self,
+                                             model=model,
+                                             quant_config=quant_config,
+                                             version=quant_config.version,
+                                             use_exllama=use_exllama,
+                                             use_exllama_v2=use_exllama_v2,
+                                             use_ipex=use_ipex)
+        
+        if visual_quant_config:
+            self._load_quantized_visual_modules(self=self,
+                                                model=model,
+                                                visual_quant_config=visual_quant_config)
+    
+    def _load_quantized_visual_modules(
+        self, model, visual_quant_config,
+    ):
+        pass
+    
+    def _load_quantized_llm_modules(
         self, model, quant_config, version, use_exllama, use_exllama_v2, use_ipex=False
     ):
         # Real quantization of weights
