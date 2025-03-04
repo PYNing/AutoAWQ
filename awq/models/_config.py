@@ -101,17 +101,11 @@ class AwqConfig(PushToHubMixin):
 @dataclass
 class VisualQuantConfig(PushToHubMixin):
     config_file_name = "config.json"
-    per_layer_config: Optional[Dict] = None
+    layer_configs: Optional[Dict] = None
 
     @classmethod
-    def from_dict(cls, quant_config: Dict = {}):
-        if not quant_config:
-            quant_config = cls()
-        else:
-            quant_config = cls(**quant_config)
-            quant_config.version = quant_config.version.lower()
-
-        return quant_config
+    def from_dict(cls, layer_configs: Dict = {}):
+        return cls(layer_configs=layer_configs) if layer_configs else None
 
     @classmethod
     def from_pretrained(cls, save_dir: str, **kwargs):
@@ -159,15 +153,15 @@ class VisualQuantConfig(PushToHubMixin):
 
     def to_dict(self):
         return {
-            "per_layer_config": self.per_layer_config,
+            "layer_configs": self.layer_configs,
         }
 
     def to_transformers_dict(self):
         return {
-            "per_layer_config": self.per_layer_config,
+            "layer_configs": self.layer_configs,
         }
 
     def from_transformers_dict(self, transformers_dict: Dict):
         return {
-            "per_layer_config": transformers_dict.get("per_layer_config"),
+            "layer_configs": transformers_dict.get("layer_configs"),
         }

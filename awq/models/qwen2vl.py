@@ -15,11 +15,11 @@ class Qwen2VLAWQForCausalLM(BaseAWQForCausalLM):
         return model.model.layers
 
     @staticmethod
-    def support_visual_modules_quantize(model: "Qwen2VLForConditionalGeneration"):
+    def support_visual_modules_quantize():
         return True
 
     @staticmethod
-    def get_visual_layers_prefix(model: "Qwen2VLForConditionalGeneration"):
+    def get_visual_layers_prefix():
         return "visual.blocks."
 
     @staticmethod
@@ -27,10 +27,17 @@ class Qwen2VLAWQForCausalLM(BaseAWQForCausalLM):
         return model.visual
 
     @staticmethod
-    def get_visual_model(model: "Qwen2VLForConditionalGeneration"):
+    def get_processor_input_map():
         return {
-            ["attn.qkv", "norm1"],
-            ["mlp.fc1", "norm2"]
+            "pixel_values": "hidden_states",
+            "image_grid_thw": "grid_thw",
+        }
+
+    @staticmethod
+    def get_fcs_ln_group_map():
+        return {
+            ("attn.qkv", "norm1"),
+            ("mlp.fc1", "norm2"),
         }
 
     @staticmethod

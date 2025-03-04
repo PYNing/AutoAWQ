@@ -10,6 +10,7 @@ from tqdm import tqdm
 from typing import List, Union, Dict
 from typing_extensions import Doc, Annotated
 from huggingface_hub import snapshot_download, save_torch_state_dict
+from awq.utils.module import get_visual_per_layer_quant_strategy
 
 from awq.modules.linear import (
     WQLinear_GEMM,
@@ -204,20 +205,23 @@ class BaseAWQForCausalLM(nn.Module):
             Dict, Doc("The quantization config for Vision Module you want to use.")
         ] = {},
         visual_calib_data: Annotated[
-            Dict, Doc("The quantization config for Vision Module you want to use.")
-        ] = {},
+            str, Doc("The quantization config for Vision Module you want to use.")
+        ] = "lmms-lab/MMBench",
         visual_calib_subset: Annotated[
-            Dict, Doc("The quantization config for Vision Module you want to use.")
-        ] = {},
+            str, Doc("The quantization config for Vision Module you want to use.")
+        ] = "en",
         visual_calib_split: Annotated[
-            Dict, Doc("The quantization config for Vision Module you want to use.")
-        ] = {},      
-        image_column: Annotated[
-            Dict, Doc("The quantization config for Vision Module you want to use.")
-        ] = {},
+            str, Doc("The quantization config for Vision Module you want to use.")
+        ] = "dev",      
+        visual_image_column: Annotated[
+            str, Doc("The quantization config for Vision Module you want to use.")
+        ] = "image",
+        visual_max_calib_samples: Annotated[
+            int, Doc("The quantization config for Vision Module you want to use.")
+        ] = 512,
         visual_smooth_quant_alpha: Annotated[
-            Dict, Doc("The quantization config for Vision Module you want to use.")
-        ] = {},  
+            float, Doc("The quantization config for Vision Module you want to use.")
+        ] = 0.8,  
         visual_quantizer_cls: Annotated[
             VisualQuantizer,
             Doc("If you want to customize the LLM quantization class, you can use AwqQuantizer as a base class.")
@@ -281,8 +285,18 @@ class BaseAWQForCausalLM(nn.Module):
                     raise RuntimeError("Visual modules quantization is not supported for the current model.")
             except AttributeError:
                 raise RuntimeError("Method 'support_visual_modules_quantize' is not available. Please confirm that this is a multimodal model.")
-            
-            self.visual_quantizer = visual_quantizer_cls()
+                        
+            self.visual_quantizer = visual_quantizer_cls(self,
+                                                         self.model,
+                                                         self.processor,
+                                                         visual_calib_data,
+                                                         visual_calib_subset,
+                                                         visual_calib_split,
+                                                         visual_image_column,
+                                                         visual_quant_config,
+                                                         visual_smooth_quant_alpha,
+                                                         visual_max_calib_samples,
+                                                         export_compatible)
             self.visual_quantizer.quantize()
         else:
             logging.info("Skip quantize Visual modules")
@@ -334,8 +348,10 @@ class BaseAWQForCausalLM(nn.Module):
                 return x
 
         # Save model and config files with empty state dict
-        self.model.config.quantization_config = self.quant_config.to_transformers_dict() if self.quant_config else None
-        self.model.config.visual_quantization_config = self.visual_quant_config.to_transformers_dict() if self.visual_quant_config else None
+        if self.quant_config:
+            self.model.config.quantization_config = self.quant_config.to_transformers_dict()
+        if self.visual_quant_config:
+            self.model.config.visual_quantization_config = self.visual_quant_config.to_transformers_dict()
         self.model.generation_config.do_sample = True
         self.model.save_pretrained(save_dir, state_dict=EmptyModule().state_dict())
 
@@ -579,29 +595,30 @@ class BaseAWQForCausalLM(nn.Module):
             dtype=torch_dtype,
         )
 
-        # Dispath to devices
-        awq_ext, msg = try_import("awq_ext")
-        if fuse_layers:
-            if best_device in ["mps", "cuda:0"] and awq_ext is None:
-                warnings.warn("Skipping fusing modules because AWQ extension is not installed." + msg)
-            else:
-                self.fuse_layers(model)
+        if quant_config:
+            # Dispath to devices
+            awq_ext, msg = try_import("awq_ext")
+            if fuse_layers:
+                if best_device in ["mps", "cuda:0"] and awq_ext is None:
+                    warnings.warn("Skipping fusing modules because AWQ extension is not installed." + msg)
+                else:
+                    self.fuse_layers(model)
 
-        if use_ipex:
-            # repack qweight to match the ipex kernel.
-            model = ipex_post_init(model)
-        elif quant_config.version == "marlin":
-            model = marlin_post_init(model)
-        elif use_exllama:
-            # creates q4 handle
-            model = exllama_post_init(model)
-        elif use_exllama_v2:
-            # creates q4 handle and allocates scratch spaces wrt max_input_len and max_batch_size
-            model = exllamav2_post_init(
-                model,
-                max_input_len=max_seq_len or 2048,
-                max_batch_size=int(os.getenv("AWQ_BATCH_SIZE", 1)),
-            )
+            if use_ipex:
+                # repack qweight to match the ipex kernel.
+                model = ipex_post_init(model)
+            elif quant_config.version == "marlin":
+                model = marlin_post_init(model)
+            elif use_exllama:
+                # creates q4 handle
+                model = exllama_post_init(model)
+            elif use_exllama_v2:
+                # creates q4 handle and allocates scratch spaces wrt max_input_len and max_batch_size
+                model = exllamav2_post_init(
+                    model,
+                    max_input_len=max_seq_len or 2048,
+                    max_batch_size=int(os.getenv("AWQ_BATCH_SIZE", 1)),
+                )
 
         model.eval()
 
@@ -681,6 +698,7 @@ class BaseAWQForCausalLM(nn.Module):
     def _load_quantized_modules(
         self, model, quant_config, visual_quant_config, use_exllama, use_exllama_v2, use_ipex=False
     ):
+        visual_quant_config 
         if quant_config:            
             self._load_quantized_llm_modules(self=self,
                                              model=model,
@@ -698,7 +716,20 @@ class BaseAWQForCausalLM(nn.Module):
     def _load_quantized_visual_modules(
         self, model, visual_quant_config,
     ):
-        pass
+        visual_quant_config = visual_quant_config.layer_configs
+        visual_layers_prefix = self.get_visual_layers_prefix()
+        per_layer_quant_strategy = get_visual_per_layer_quant_strategy(model, visual_layers_prefix, visual_quant_config)
+        for moudle_name, module in model.named_modules():
+            if moudle_name not in per_layer_quant_strategy:
+                continue
+            
+            quant_strategy = per_layer_quant_strategy[moudle_name]
+            q_linear_module = Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(module.in_features,
+                                                                             module.out_features,
+                                                                             module.bias is not None,
+                                                                             quant_strategy["act_quant_bit"],
+                                                                             quant_strategy["gemm_out_requant_dtype"])
+            set_op_by_name(model, moudle_name, q_linear_module)
     
     def _load_quantized_llm_modules(
         self, model, quant_config, version, use_exllama, use_exllama_v2, use_ipex=False

@@ -94,16 +94,16 @@ class Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(nn.Module):
                  out_features: int,
                  bias: bool,
                  act_quant_bit: int,
-                 gemm_out_dtype: str,
+                 gemm_out_requant_bit: int,
                  ) -> None:
         super().__init__()
         
-        assert gemm_out_dtype in ["int32", "int16", "int8"]
+        assert gemm_out_requant_bit in [32, 16, 8]
         
         self.in_features = in_features
         self.out_features = out_features
         self.act_quant_bit = act_quant_bit
-        self.gemm_out_dtype = gemm_out_dtype
+        self.gemm_out_requant_bit = gemm_out_requant_bit
         
         self.register_buffer(
             "weight",
@@ -180,16 +180,16 @@ class Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(nn.Module):
         act_in_range,
         act_out_range,
         act_quant_bit,
-        gemm_out_dtype
+        gemm_out_requant_bit
     ):
         assert isinstance(fp16_linear, torch.nn.Linear)
         assert act_quant_bit in [8, 16]
-        assert gemm_out_dtype in ["int32", "int16", "int8"]
+        assert gemm_out_requant_bit in [32, 16, 8]
         quanted_linear = Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(in_features=fp16_linear.in_features,
                                                                        out_features=fp16_linear.out_features,
                                                                        bias=fp16_linear.bias is not None,
                                                                        act_quant_bit=act_quant_bit,
-                                                                       gemm_out_dtype=gemm_out_dtype)
+                                                                       gemm_out_requant_bit=gemm_out_requant_bit)
         
         # NOTE(ningpeiyang）: currently support W8A8 or W8A16 only
         weight_quant_bit = 8
@@ -207,7 +207,7 @@ class Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(nn.Module):
         quanted_linear.bias = qunatized_bias
         
         max_act_out_int = int(round(act_out_range / (act_scale * weight_scale)))
-        if gemm_out_dtype == "int32":
+        if gemm_out_requant_bit == 32:
             HALF_MAX = 65504
             if max_act_out_int <= HALF_MAX:
                 M = 1
@@ -217,7 +217,7 @@ class Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(nn.Module):
                 requant_scale_fp = HALF_MAX / max_act_out_int
                 M, FL = find_best_approximation(requant_scale_fp)
                 requant_scale = M / 2**FL
-        elif gemm_out_dtype == "int16":
+        elif gemm_out_requant_bit == 16:
             INT16_MAX = 32767
             if max_act_out_int <= INT16_MAX:
                 M = 1
@@ -227,7 +227,7 @@ class Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(nn.Module):
                 requant_scale_fp = INT16_MAX / max_act_out_int
                 M, FL = find_best_approximation(requant_scale_fp)
                 requant_scale = M / 2**FL
-        elif gemm_out_dtype == "int8":
+        elif gemm_out_requant_bit == 8:
             INT8_MAX = 127
             if max_act_out_int <= INT8_MAX:
                 M = 1
@@ -238,7 +238,7 @@ class Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(nn.Module):
                 M, FL = find_best_approximation(requant_scale_fp)
                 requant_scale = M / 2**FL
         else:
-            raise RuntimeError(f"Unsupport requant type {gemm_out_dtype}")
+            raise RuntimeError(f"Unsupport GEMM out requant bit: {gemm_out_requant_bit}")
         
         quanted_linear.M = torch.tensor([M], dtype=torch.int16)
         quanted_linear.FL = torch.tensor([FL], dtype=torch.int8)

@@ -1,6 +1,7 @@
 import torch.nn as nn
 import importlib
 import logging
+from awq.models._config import VisualQuantConfig
 
 def try_import(module_name):
     try:
@@ -64,20 +65,33 @@ def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert):
             filtered_layers[name] = linear_layer
     return filtered_layers
 
-def get_visual_quant_linear_names(model,
-                                  visual_layers_prefix,
-                                  visual_quant_config,
-                                  ):
-    quant_linear_names = list()
+def get_visual_per_layer_quant_strategy(model,
+                                        visual_layers_prefix,
+                                        visual_quant_config,
+                                       ):
+    if isinstance(visual_quant_config, VisualQuantConfig):
+        visual_quant_config = visual_quant_config.layer_configs
+        
+    quant_strategy = {
+        "w8a8o8": {"weight_quant_bit": 8, "act_quant_bit": 8, "gemm_out_requant_bit": 8},
+        "w8a16o8": {"weight_quant_bit": 8, "act_quant_bit": 16, "gemm_out_requant_bit": 8},
+        "w8a8o16": {"weight_quant_bit": 8, "act_quant_bit": 8, "gemm_out_requant_bit": 16},
+        "w8a16o16": {"weight_quant_bit": 8, "act_quant_bit": 16, "gemm_out_requant_bit": 16},
+    }
+    
+    per_layer_quant_strategy = dict()
     for name, module in model.named_modules():
-        if not (name.startswith(visual_layers_prefix) and isinstance(module, nn.torch.nn.Linear)):
+        if not (name.startswith(visual_layers_prefix) and isinstance(module, nn.Linear)):
             continue
         if name not in visual_quant_config:
-            logging.info(f"Missing quantization configuration for `{name}` in `visual_quant_config`, skipping its quantization.")
-            continue
-        linear_quant_config = visual_quant_config[name]
-        if not linear_quant_config["quant"]:
+            name = "common"
+        linear_quant_strategy = visual_quant_config[name]
+        linear_quant_strategy = linear_quant_strategy.lower()        
+        if linear_quant_strategy in ["fp16", "bf16"]:
             logging.info(f"Quantization for `{name}` is set to disabled, skipping its quantization.")
             continue
-        quant_linear_names.append(name)
-    return quant_linear_names
+        if linear_quant_strategy not in quant_strategy:
+            raise RuntimeError(f"Unspport Linear Quantization Strategy: {linear_quant_strategy}")
+        per_layer_quant_strategy[name] = linear_quant_strategy
+        
+    return per_layer_quant_strategy

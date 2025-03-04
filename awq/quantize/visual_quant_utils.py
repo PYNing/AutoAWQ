@@ -8,6 +8,7 @@ import numpy as np
 import logging
 from datasets import load_dataset
 from awq.utils.module import set_op_by_name, get_op_by_name
+from awq.utils.utils import get_best_device
 
 def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, processor, max_calib_samples):
     visual_calib_dataset = load_dataset(path=calib_dataset_name, 
@@ -32,13 +33,15 @@ def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, p
 
 def get_act_scales(model_wapper,
                    model,
-                   quant_linear_names,
+                   per_layer_quant_strategy,
                    cali_data,
                    processor_input_map,
                    ):
-    visual_model = model_wapper.get_visual_model()
+    visual_model = model_wapper.get_visual_model(model)
+    ori_device = next(visual_model.parameters()).device
+    device = get_best_device()
+    visual_model.to(device)
     visual_model.eval()
-    device = next(visual_model.parameters()).device
     act_scales = {}
 
     def stat_tensor(name, tensor):
@@ -57,7 +60,7 @@ def get_act_scales(model_wapper,
 
     hooks = []
     for name, m in model.named_modules():
-        if name not in quant_linear_names:
+        if name not in per_layer_quant_strategy:
             continue
         assert isinstance(m, nn.Linear)
         logging.info(f"Add stat_input_hook for {name}")
@@ -68,7 +71,7 @@ def get_act_scales(model_wapper,
     for i in pbar:
         preprocessed_data = cali_data[i]
         input_dict = dict()
-        for name_in_processor, data in preprocessed_data:
+        for name_in_processor, data in preprocessed_data.items():
             if name_in_processor not in processor_input_map: 
                 continue
             if isinstance(data, torch.Tensor):
@@ -81,6 +84,7 @@ def get_act_scales(model_wapper,
     for h in hooks:
         h.remove()
 
+    visual_model.to(ori_device)
     return act_scales
 
 def get_related_fcs_ln(model, moudle_name, ln_linear_map, quant_config):
@@ -156,14 +160,14 @@ def smooth_ln_fcs(ln, fcs, act_scales, alpha=0.5):
 
 @torch.no_grad()
 def smooth_model(model,
-                 quant_linear_names,
+                 per_layer_quant_strategy,
                  ln_linear_map, 
                  scales, 
                  alpha):
     
     processed_fc_names = list()
     for moudle_name, module in model.named_modules():
-        if moudle_name not in quant_linear_names:
+        if moudle_name not in per_layer_quant_strategy:
             continue
         if processed_fc_names in processed_fc_names:
             continue
@@ -180,12 +184,15 @@ def smooth_model(model,
 def get_static_decoder_layer_scales(model_wapper,
                                     model,
                                     cali_data,
-                                    quant_linear_names,
+                                    per_layer_quant_strategy,
                                     processor_input_map,
                                     ):
-    visual_model = model_wapper.get_visual_model()
+    
+    visual_model = model_wapper.get_visual_model(model)
+    ori_device = next(visual_model.parameters()).device
+    device = get_best_device()
+    visual_model.to(device)
     visual_model.eval()
-    device = next(visual_model.parameters()).device
     
     act_dict = defaultdict(dict)
 
@@ -209,17 +216,17 @@ def get_static_decoder_layer_scales(model_wapper,
 
     hooks = []
     for name, m in model.named_modules():
-        if name not in quant_linear_names:
+        if name not in per_layer_quant_strategy:
             continue
         
         if isinstance(m, torch.nn.Linear):
             hooks.append(m.register_forward_hook(functools.partial(stat_io_hook, name=name)))
 
-    pbar = tqdm(range(cali_data))
+    pbar = tqdm(range(len(cali_data)))
     for i in pbar:
         preprocessed_data = cali_data[i]
         input_dict = dict()
-        for name_in_processor, data in preprocessed_data:
+        for name_in_processor, data in preprocessed_data.items():
             if name_in_processor not in processor_input_map: 
                 continue
             if isinstance(data, torch.Tensor):
@@ -228,30 +235,29 @@ def get_static_decoder_layer_scales(model_wapper,
             input_dict[name_in_input] = data
         with torch.inference_mode():
             im_emb = visual_model(**input_dict)
-            
+        
         mean_scale = np.mean([v["input"] for v in act_dict.values()])
         pbar.set_description(f"Mean input scale: {mean_scale:.2f}")
     
     for hook in hooks:
         hook.remove()
 
+    visual_model.to(ori_device)
     return act_dict
 
 def quant_linear_layers(model,
-                        quant_linear_names,
+                        per_layer_quant_strategy,
                         act_io_range,
-                        quant_config,
                         ):    
     
-    pbar = tqdm(range(quant_linear_names))
-    for i in pbar:
-        linear_name = quant_linear_names[i]
+    pbar = tqdm(per_layer_quant_strategy.keys())
+    for linear_name in pbar:
+        quant_strategy = per_layer_quant_strategy[linear_name]
         linear = get_op_by_name(model, linear_name)
-        linear_quant_config = quant_config["name"]
         quanted_linear = Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear.from_float(linear,
                                                                                    act_io_range[linear_name]["input"],
                                                                                    act_io_range[linear_name]["output"],
-                                                                                   linear_quant_config["act_quant_bit"],
-                                                                                   linear_quant_config["gemm_out_dtype"])
+                                                                                   quant_strategy["act_quant_bit"],
+                                                                                   quant_strategy["gemm_out_requant_bit"])
         set_op_by_name(model, linear_name, quanted_linear)
         
