@@ -7,7 +7,7 @@ from awq.modules.linear import Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear
 import numpy as np
 import logging
 from datasets import load_dataset
-from awq.utils.module import set_op_by_name, get_op_by_name
+from awq.utils.module import set_op_by_name, get_op_by_name, VISUAL_QUANT_STRATEGY_SET
 from awq.utils.utils import get_best_device
 
 def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, processor, max_calib_samples):
@@ -87,7 +87,7 @@ def get_act_scales(model_wapper,
     visual_model.to(ori_device)
     return act_scales
 
-def get_related_fcs_ln(model, moudle_name, ln_linear_map, quant_config):
+def get_related_fcs_ln(model, moudle_name, ln_linear_map, per_layer_quant_strategy):
     target_group = None
     target_suffix = None
     for group in ln_linear_map:
@@ -101,8 +101,8 @@ def get_related_fcs_ln(model, moudle_name, ln_linear_map, quant_config):
     
     target_fc_names = list()
     target_fcs = list()
-    target_ln_name = list()
-    target_ln = list()
+    target_ln_name = None
+    target_ln = None
     for suffix in target_group:
         target_moudle_name = moudle_name.replace(target_suffix, suffix)
         target_moudle = get_op_by_name(model, target_moudle_name)
@@ -111,12 +111,12 @@ def get_related_fcs_ln(model, moudle_name, ln_linear_map, quant_config):
             target_fc_names.append(target_moudle_name)
             target_fcs.append(target_moudle)
         else:
-            target_ln_name.append(target_moudle_name)
-            target_ln.append(target_moudle)
+            target_ln_name = target_moudle_name
+            target_ln = target_moudle
     
     no_fc_to_quant = True
     for fc_name in target_fc_names:
-        if fc_name in quant_config and quant_config[fc_name]["quant"]:
+        if fc_name in per_layer_quant_strategy:
             no_fc_to_quant = False
             break
     
@@ -172,10 +172,13 @@ def smooth_model(model,
         if processed_fc_names in processed_fc_names:
             continue
         assert isinstance(module, nn.Linear)
-        target_fc_names, target_fcs, target_ln_name, target_ln = get_related_fcs_ln(moudle_name, ln_linear_map)
+        target_fc_names, target_fcs, target_ln_name, target_ln = get_related_fcs_ln(model, 
+                                                                                    moudle_name, 
+                                                                                    ln_linear_map, 
+                                                                                    per_layer_quant_strategy)
         if target_fc_names is None:
             continue
-        linear_input_scale = smooth_ln_fcs[moudle_name]
+        linear_input_scale = scales[moudle_name]
         logging.info(f"Smoothing the following FCs:\n{', '.join(target_fc_names)}\nwith Norm: {target_ln_name}")
         smooth_ln_fcs(target_ln, target_fcs, linear_input_scale, alpha)
 
@@ -249,11 +252,11 @@ def quant_linear_layers(model,
                         per_layer_quant_strategy,
                         act_io_range,
                         ):    
-    
     pbar = tqdm(per_layer_quant_strategy.keys())
     for linear_name in pbar:
-        quant_strategy = per_layer_quant_strategy[linear_name]
         linear = get_op_by_name(model, linear_name)
+        quant_strategy = per_layer_quant_strategy[linear_name]
+        quant_strategy = VISUAL_QUANT_STRATEGY_SET[quant_strategy]
         quanted_linear = Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear.from_float(linear,
                                                                                    act_io_range[linear_name]["input"],
                                                                                    act_io_range[linear_name]["output"],

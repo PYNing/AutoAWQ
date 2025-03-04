@@ -10,7 +10,7 @@ from tqdm import tqdm
 from typing import List, Union, Dict
 from typing_extensions import Doc, Annotated
 from huggingface_hub import snapshot_download, save_torch_state_dict
-from awq.utils.module import get_visual_per_layer_quant_strategy
+from awq.utils.module import get_visual_per_layer_quant_strategy, VISUAL_QUANT_STRATEGY_SET
 
 from awq.modules.linear import (
     WQLinear_GEMM,
@@ -724,11 +724,12 @@ class BaseAWQForCausalLM(nn.Module):
                 continue
             
             quant_strategy = per_layer_quant_strategy[moudle_name]
+            quant_strategy = VISUAL_QUANT_STRATEGY_SET[quant_strategy]
             q_linear_module = Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(module.in_features,
                                                                              module.out_features,
                                                                              module.bias is not None,
                                                                              quant_strategy["act_quant_bit"],
-                                                                             quant_strategy["gemm_out_requant_dtype"])
+                                                                             quant_strategy["gemm_out_requant_bit"])
             set_op_by_name(model, moudle_name, q_linear_module)
     
     def _load_quantized_llm_modules(

@@ -49,7 +49,7 @@ def dequant_activation(tensor: torch.Tensor, dequant_scale: torch.Tensor, out_dt
 def igemm(activation: torch.Tensor, 
           weight: torch.Tensor, 
           bias: torch.Tensor,
-          gemm_out_dtype: str, 
+          gemm_out_requant_bit: int, 
           M: torch.Tensor,
           FL: torch.Tensor) -> torch.Tensor:
     if activation.dtype != torch.int8 and activation.dtype != torch.int16:
@@ -73,18 +73,18 @@ def igemm(activation: torch.Tensor,
     out_requant = out_int32.to(torch.int64) * M
     out_requant = torch.clamp(out_requant, -2**46, 2**46 - 1) >> FL 
     
-    if gemm_out_dtype == "int32":
+    if gemm_out_requant_bit == 32:
         # NOTE(ningpeiyang): to avoid inf or nan in fp16 dequant
         # When quantizing, I have tried to controlling the value 
         # within the fp16 value range by requant, but clamp() is 
         # still necessary
         out = torch.clamp(out_requant, min=-65504, max=65504).to(torch.int32)
-    elif gemm_out_dtype == "int16":
+    elif gemm_out_requant_bit == 16:
         out = torch.clamp(out_requant, min=-32768, max=32767).to(torch.int16)
-    elif gemm_out_dtype == "int8":
+    elif gemm_out_requant_bit == 8:
         out = torch.clamp(out_requant, min=-128, max=127).to(torch.int8)
     else:
-        raise RuntimeError(f"Unknown gemm_out_dtype:{gemm_out_dtype}")
+        raise RuntimeError(f"Unsupported GEMM output requant bit: {gemm_out_requant_bit}")
     return out
     
 
@@ -163,7 +163,7 @@ class Fused_StaticQuant_IGEMM_Dequant_AddBias_Linear(nn.Module):
         #     raise ValueError(f"NaN or Inf detected in layer {self.__class__.__name__}, activation")
         
         activation_quanted = quantize_activation(activation, self.act_scale, self.act_quant_bit)
-        gemm_out = igemm(activation_quanted, self.weight, self.bias, self.gemm_out_dtype, self.M, self.FL)
+        gemm_out = igemm(activation_quanted, self.weight, self.bias, self.gemm_out_requant_bit, self.M, self.FL)
         out = dequant_activation(gemm_out, self.dequant_scale, activation.dtype)
         
         # if torch.isnan(out).any() or torch.isinf(out).any():

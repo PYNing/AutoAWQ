@@ -65,32 +65,33 @@ def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert):
             filtered_layers[name] = linear_layer
     return filtered_layers
 
+VISUAL_QUANT_STRATEGY_SET = {
+    "w8a8o8": {"weight_quant_bit": 8, "act_quant_bit": 8, "gemm_out_requant_bit": 8},
+    "w8a16o8": {"weight_quant_bit": 8, "act_quant_bit": 16, "gemm_out_requant_bit": 8},
+    "w8a8o16": {"weight_quant_bit": 8, "act_quant_bit": 8, "gemm_out_requant_bit": 16},
+    "w8a16o16": {"weight_quant_bit": 8, "act_quant_bit": 16, "gemm_out_requant_bit": 16},
+}
+
 def get_visual_per_layer_quant_strategy(model,
                                         visual_layers_prefix,
                                         visual_quant_config,
                                        ):
     if isinstance(visual_quant_config, VisualQuantConfig):
         visual_quant_config = visual_quant_config.layer_configs
-        
-    quant_strategy = {
-        "w8a8o8": {"weight_quant_bit": 8, "act_quant_bit": 8, "gemm_out_requant_bit": 8},
-        "w8a16o8": {"weight_quant_bit": 8, "act_quant_bit": 16, "gemm_out_requant_bit": 8},
-        "w8a8o16": {"weight_quant_bit": 8, "act_quant_bit": 8, "gemm_out_requant_bit": 16},
-        "w8a16o16": {"weight_quant_bit": 8, "act_quant_bit": 16, "gemm_out_requant_bit": 16},
-    }
     
     per_layer_quant_strategy = dict()
     for name, module in model.named_modules():
         if not (name.startswith(visual_layers_prefix) and isinstance(module, nn.Linear)):
             continue
-        if name not in visual_quant_config:
-            name = "common"
-        linear_quant_strategy = visual_quant_config[name]
+        if name in visual_quant_config:
+            linear_quant_strategy = visual_quant_config[name]
+        else:
+            linear_quant_strategy = visual_quant_config["common"]
         linear_quant_strategy = linear_quant_strategy.lower()        
         if linear_quant_strategy in ["fp16", "bf16"]:
             logging.info(f"Quantization for `{name}` is set to disabled, skipping its quantization.")
             continue
-        if linear_quant_strategy not in quant_strategy:
+        if linear_quant_strategy not in VISUAL_QUANT_STRATEGY_SET:
             raise RuntimeError(f"Unspport Linear Quantization Strategy: {linear_quant_strategy}")
         per_layer_quant_strategy[name] = linear_quant_strategy
         
