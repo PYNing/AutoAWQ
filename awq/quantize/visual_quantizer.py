@@ -17,8 +17,9 @@ class VisualQuantizer:
         visual_image_column,
         visual_quant_config,
         visual_smooth_quant_alpha,
-        visual_max_calib_samples=512,
-        export_compatible=False,
+        visual_max_calib_samples,
+        visual_dataset_shuffle_seed,
+        export_compatible,
     ) -> None:
         self.model_warpper = model_warpper
         self.model = model
@@ -30,6 +31,7 @@ class VisualQuantizer:
         self.image_column = visual_image_column
         self.max_calib_samples = visual_max_calib_samples
         self.smooth_quant_alpha = visual_smooth_quant_alpha
+        self.dataset_shuffle_seed = visual_dataset_shuffle_seed
         self.export_compatible = export_compatible
         
     def quantize(
@@ -46,7 +48,8 @@ class VisualQuantizer:
                                   self.calib_split, 
                                   self.image_column,
                                   self.processor,
-                                  self.max_calib_samples)
+                                  self.max_calib_samples,
+                                  self.dataset_shuffle_seed)
         
         # Step1: get max values of activation per channel 
         act_scales_for_smooth = get_act_scales(self.model_warpper,

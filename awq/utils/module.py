@@ -79,20 +79,32 @@ def get_visual_per_layer_quant_strategy(model,
     if isinstance(visual_quant_config, VisualQuantConfig):
         visual_quant_config = visual_quant_config.layer_configs
     
-    per_layer_quant_strategy = dict()
-    for name, module in model.named_modules():
-        if not (name.startswith(visual_layers_prefix) and isinstance(module, nn.Linear)):
+    for layer_name, quant_strategy in visual_quant_config.items():
+        if layer_name == "default":
             continue
-        if name in visual_quant_config:
-            linear_quant_strategy = visual_quant_config[name]
+        try:
+            get_op_by_name(model, layer_name)
+        except ValueError:
+            raise ValueError(f"Cannot find op {layer_name} in following modules: \n {model.named_modules().keys()}, \n plEase check `visual_quant_config`")
+    
+    per_layer_quant_strategy = dict()
+    for layer_name, module in model.named_modules():
+        if not (layer_name.startswith(visual_layers_prefix) and isinstance(module, nn.Linear)):
+            continue
+        if layer_name in visual_quant_config:
+            linear_quant_strategy = visual_quant_config[layer_name]
         else:
-            linear_quant_strategy = visual_quant_config["common"]
+            if "default" not in visual_quant_config:
+                    raise ValueError(f"No quantization strategy specified for layer {layer_name}, and 'default' is missing in `visual_quant_config`."
+                                     "Please ensure that either each visual layer has a specific quantization strategy or a 'default' strategy is defined."
+                                    )
+            linear_quant_strategy = visual_quant_config["default"]
         linear_quant_strategy = linear_quant_strategy.lower()        
         if linear_quant_strategy in ["fp16", "bf16"]:
-            logging.info(f"Quantization for `{name}` is set to disabled, skipping its quantization.")
+            logging.info(f"Quantization for `{layer_name}` is set to disabled, skipping its quantization.")
             continue
         if linear_quant_strategy not in VISUAL_QUANT_STRATEGY_SET:
             raise RuntimeError(f"Unspport Linear Quantization Strategy: {linear_quant_strategy}")
-        per_layer_quant_strategy[name] = linear_quant_strategy
+        per_layer_quant_strategy[layer_name] = linear_quant_strategy
         
     return per_layer_quant_strategy

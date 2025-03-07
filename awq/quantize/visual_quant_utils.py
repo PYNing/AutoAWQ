@@ -10,10 +10,14 @@ from datasets import load_dataset
 from awq.utils.module import set_op_by_name, get_op_by_name, VISUAL_QUANT_STRATEGY_SET
 from awq.utils.utils import get_best_device
 
-def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, processor, max_calib_samples):
+def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, processor, max_calib_samples, dataset_shuffle_seed):
     visual_calib_dataset = load_dataset(path=calib_dataset_name, 
                                         name=calib_subset, 
                                         split=calib_split)
+    if dataset_shuffle_seed:
+        if not isinstance(dataset_shuffle_seed, int):
+            raise ValueError("`dataset_shuffle_seed` must be an integer")
+        visual_calib_dataset = visual_calib_dataset.shuffle(seed=dataset_shuffle_seed)
 
     if len(visual_calib_dataset) < max_calib_samples:
         logging.warning(f"`max_calib_samples` is set to {max_calib_samples}, \
@@ -22,7 +26,7 @@ def get_cali_data(calib_dataset_name, calib_subset, calib_split, image_column, p
         max_calib_samples = len(visual_calib_dataset)
     
     cali_data = list()
-    pbar = tqdm(range(max_calib_samples))
+    pbar = tqdm(range(max_calib_samples), desc="Processing Calibration Data")
     for i in pbar:
         data = visual_calib_dataset[i]
         image = data[image_column]
@@ -67,7 +71,7 @@ def get_act_scales(model_wapper,
         hooks.append(m.register_forward_hook(functools.partial(stat_input_hook, name=name)))
 
     num_samples = len(cali_data)
-    pbar = tqdm(range(num_samples))
+    pbar = tqdm(range(num_samples), desc="Computing Activation Scales")
     for i in pbar:
         preprocessed_data = cali_data[i]
         input_dict = dict()
@@ -225,7 +229,7 @@ def get_static_decoder_layer_scales(model_wapper,
         if isinstance(m, torch.nn.Linear):
             hooks.append(m.register_forward_hook(functools.partial(stat_io_hook, name=name)))
 
-    pbar = tqdm(range(len(cali_data)))
+    pbar = tqdm(range(len(cali_data)), desc="Computing Static Scales")
     for i in pbar:
         preprocessed_data = cali_data[i]
         input_dict = dict()
@@ -252,7 +256,7 @@ def quant_linear_layers(model,
                         per_layer_quant_strategy,
                         act_io_range,
                         ):    
-    pbar = tqdm(per_layer_quant_strategy.keys())
+    pbar = tqdm(per_layer_quant_strategy.keys(), desc="Quantizing Linear Layers")
     for linear_name in pbar:
         linear = get_op_by_name(model, linear_name)
         quant_strategy = per_layer_quant_strategy[linear_name]

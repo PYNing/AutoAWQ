@@ -203,29 +203,32 @@ class BaseAWQForCausalLM(nn.Module):
             Doc("If you want to customize the LLM quantization class, you can use AwqQuantizer as a base class.")
         ] = AwqQuantizer,
         visual_quant_config: Annotated[
-            Dict, Doc("The quantization config for Vision Module you want to use.")
+            Dict, Doc("The quantization config for the vision module.")
         ] = {},
         visual_calib_data: Annotated[
-            str, Doc("The quantization config for Vision Module you want to use.")
+            str, Doc("The calibration dataset for the vision module.")
         ] = "lmms-lab/MMBench",
         visual_calib_subset: Annotated[
-            str, Doc("The quantization config for Vision Module you want to use.")
+            str, Doc("The language subset of the vision calibration dataset (e.g., 'en' for English).")
         ] = "en",
         visual_calib_split: Annotated[
-            str, Doc("The quantization config for Vision Module you want to use.")
+            str, Doc("The data split to use for vision module calibration (e.g., 'train', 'dev').")
         ] = "dev",      
         visual_image_column: Annotated[
-            str, Doc("The quantization config for Vision Module you want to use.")
+            str, Doc("The column name in the dataset that contains image data.")
         ] = "image",
         visual_max_calib_samples: Annotated[
-            int, Doc("The quantization config for Vision Module you want to use.")
+            int, Doc("The maximum number of images to use for vision module calibration.")
         ] = 512,
         visual_smooth_quant_alpha: Annotated[
-            float, Doc("The quantization config for Vision Module you want to use.")
+            float, Doc("The alpha parameter for smooth quantization in the vision module.")
         ] = 0.8,  
+        visual_dataset_shuffle_seed: Annotated[
+            int, Doc("The random seed used for shuffling the vision calibration dataset.")
+        ] = None, 
         visual_quantizer_cls: Annotated[
             VisualQuantizer,
-            Doc("If you want to customize the LLM quantization class, you can use AwqQuantizer as a base class.")
+            Doc("If you want to customize the vision module quantization class, use VisualQuantizer as a base class.")
         ] = VisualQuantizer,
         **kwargs,
     ):
@@ -297,6 +300,7 @@ class BaseAWQForCausalLM(nn.Module):
                                                          visual_quant_config,
                                                          visual_smooth_quant_alpha,
                                                          visual_max_calib_samples,
+                                                         visual_dataset_shuffle_seed,
                                                          export_compatible)
             self.visual_quantizer.quantize()
         else:
